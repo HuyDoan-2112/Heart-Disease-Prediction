@@ -3,14 +3,13 @@ import random
 import warnings
 import numpy as np
 import pandas as pd
-
+import seaborn as sns
 import matplotlib.pyplot as plt
 
-from xgboost import XGBClassifier
+
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import StratifiedKFold, cross_val_score
-
-
 
 warnings.filterwarnings('ignore')
 
@@ -53,100 +52,98 @@ X_fe_dt_train, y_fe_dt_train = read_csv('splits/fe_dt_train.csv')
 X_fe_dt_val, y_fe_dt_val = read_csv('splits/fe_dt_val.csv')
 X_fe_dt_test, y_fe_dt_test = read_csv('splits/fe_dt_test.csv')
 
-# Find the optimal quantity of subtrees for XGB model by Stratifiel K-Fold Cross-Validation
 
-def find_optimal_xgb( X_train, y_train,
-    n_estimators_range=range(50,501,50),
-    cv_splits=3,
-    learning_rate=0.1,
-    max_depth=5,
-    subsample=1.0,
-    use_gpu=False
-):  
+# Find the optimal quantity of subtrees for RF model by Stratifiel K-Fold Cross-Validation
+def find_optimal_rf(
+    X_train, y_train, n_estimators_range=range(50,501,50), cv_splits=3,
+    max_depth=5,min_samples_split=2,min_samples_leaf=1,
+    max_features='sqrt',bootstrap=True,class_weight=None
+):
     cv = StratifiedKFold(n_splits=cv_splits, shuffle=True, random_state=SEED)
-    scores=[]
-    
-    n_classes = len(np.unique(y_train))
-    objective = 'binary:logistic' if n_classes == 2 else 'multi:softprob'
-    eval_metric = 'logloss' if n_classes == 2 else 'mlogloss'
+    scores = []
     for n in n_estimators_range:
-        xgb = XGBClassifier(
-            n_estimators=n, learning_rate=learning_rate, max_depth=max_depth, subsample=subsample,
-            objective=objective, eval_metric=eval_metric, random_state=SEED, 
-            n_jobs=-1,tree_method='gpu_hist' if use_gpu else 'hist', verbosity=0
+        rf = RandomForestClassifier(
+            n_estimators=n, max_depth=max_depth, min_samples_split=min_samples_split,
+            min_samples_leaf=min_samples_leaf,max_features=max_features,
+            bootstrap=bootstrap,class_weight=class_weight,n_jobs=-1, random_state=SEED
         )
-        cv_score = cross_val_score(
-            xgb, X_train, y_train,
-            cv=cv, scoring='accuracy', n_jobs=-1
-        )
+        cv_score = cross_val_score(rf, X_train, y_train, 
+                                cv=cv,scoring="accuracy",n_jobs=-1)
         scores.append(cv_score.mean())
-        
     plt.figure(figsize=(10, 6))
     plt.plot(list(n_estimators_range), scores, 'bo-')
-    plt.title(f'Choose n_estimators optimize for XGBoost (CV={cv_splits}-fold)')
+    plt.title(f'Choose n_estimators optimize for Random Forest (CV={cv_splits}-fold)')
     plt.xlabel('n_estimators')
     plt.ylabel('Cross-Validation Accuracy')
     plt.grid(True)
-    plt.savefig('xgb_accuracy_and_n_estimators.png', bbox_inches='tight')
+    plt.savefig('Plots/Random_Forest_accuracy_and_n_estimators.png', bbox_inches='tight')
     plt.show()
     
     best_n = list(n_estimators_range)[int(np.argmax(scores))]
-    print(f'n_estimators optimize (CV): {best_n}')
+    print(f'n_estimators tối ưu (CV): {best_n}')
     
-    best_model = XGBClassifier(
-        n_estimators=best_n, learning_rate=learning_rate, max_depth=max_depth,
-        subsample=subsample, objective=objective, eval_metric=eval_metric, random_state=SEED, n_jobs=-1,
-        tree_method='gpu_hist' if use_gpu else 'hist', verbosity=0
+    best_model = RandomForestClassifier(
+        n_estimators=best_n, max_depth=max_depth,min_samples_split=min_samples_split,
+        min_samples_leaf=min_samples_leaf,max_features=max_features,bootstrap=bootstrap,
+        class_weight=class_weight,n_jobs=-1,random_state=SEED
     )
     best_model.fit(X_train, y_train)
     return best_model, best_n, max(scores)
 
-def evaluate_val_xgb(X_train, y_train, X_val, y_val,
-                     n_estimators_range=range(50,501, 50), cv_splits=3,
-                     learning_rate=0.1, max_depth=5,subsample=1.0,
-                     colsample_bytree=1.0, use_gpu=False):
-    print(f'Find n_estimators optimize for XG boost')
-    xgb_model, best_n, cv_acc= find_optimal_xgb(
-        X_train, y_train, n_estimators_range=n_estimators_range,
-        cv_splits=cv_splits, learning_rate=learning_rate,max_depth=max_depth, subsample=subsample, use_gpu=use_gpu
+# Next, another function trains, validates, and tests the model’s performance
+def evaluate_val_rf(X_train, y_train, X_val, y_val,
+                    n_estimators_range=range(50,501,50), cv_splits=5,max_depth=5,
+                    min_samples_split=2,min_samples_leaf=1,max_features='sqrt',
+                    bootstrap=True,class_weight=None
+                    ):
+    print('Find n_estimators optimize for the RF')
+    rf_model, best_n, cv_acc = find_optimal_rf(
+        X_train, y_train, n_estimators_range=n_estimators_range, cv_splits=cv_splits,
+        max_depth=max_depth,min_samples_split=min_samples_split,min_samples_leaf=min_samples_leaf,
+        max_features=max_features, bootstrap=bootstrap, class_weight=class_weight
     )
-    val_pred = xgb_model.predict(X_val)
+    
+    val_pred = rf_model.predict(X_val)
     val_acc = accuracy_score(y_val, val_pred)
-    print(f'\nThe accuracy XGBoost on validation test: {val_acc:.4f}' )
-    print('Classification Report')
+    print(f'\nAccuracy Random Forest on validation: {val_acc:.4f}')
+    print('Classification Report:')
     print(classification_report(y_val, val_pred))
-    return xgb_model, val_acc, {'n_estimators': best_n}
+    return rf_model, val_acc, {'n_estimators': best_n}
 
-def evaluate_test_xgb(xgb_model, X_test, y_test):
-    test_pred = xgb_model.predict(X_test)
-    test_acc  = accuracy_score(y_test, test_pred)
-    print(f'\nThe accuracy XGBoost on the test: {test_acc:.4f}')
+def evaluate_test_rf(rf_model, X_test, y_test):
+    test_pred = rf_model.predict(X_test)
+    test_acc = accuracy_score(y_test, test_pred)
+    print(f'\nAccuracy Random Forest on validation: {test_acc:.4f}')
     print('Classification Report:')
     print(classification_report(y_test, test_pred))
     return test_acc
+    
+    
+# Carrying training model on four dif datasets
 
-# XGB on Original Dataset
-xgb_model, val_acc, best_params = evaluate_val_xgb(
+#RF on Original Dataset
+rf_model, val_acc, best_params = evaluate_val_rf(
     X_train, y_train, X_val, y_val
 )
-test_acc = evaluate_test_xgb(xgb_model, X_test, y_test)
+test_acc = evaluate_test_rf(rf_model, X_test, y_test)
 
-# XGB on Feature Engineering Dataset
-xgb_model, val_fe_acc, best_params = evaluate_val_xgb(
+#RF on Feature Engineering Dataset
+rf_model, val_fe_acc, best_params =evaluate_val_rf(
     X_fe_train, y_fe_train, X_fe_val, y_fe_val
 )
-test_fe_acc = evaluate_test_xgb(xgb_model, X_fe_test, y_fe_test)
+test_fe_acc = evaluate_test_rf(rf_model, X_fe_test, y_fe_test)
 
-# XGB on Original DT Dataset
-xgb_model, val_dt_acc, best_params = evaluate_val_xgb(
+# RF on Original DT Dataset
+rf_model, val_dt_acc, best_params = evaluate_val_rf(
     X_dt_train, y_dt_train, X_dt_val, y_dt_val
 )
-test_dt_acc = evaluate_test_xgb(xgb_model, X_dt_test, y_dt_test)
-# XGB on Feature Engineering DT Dataset
-xgb_model, val_fe_dt_acc, best_params = evaluate_val_xgb(
-    X_fe_dt_train, y_fe_dt_train, X_fe_dt_val, y_fe_dt_val,
+test_dt_acc = evaluate_test_rf(rf_model, X_dt_test, y_dt_test)
+
+# RF on Feature Engineering DT Dataset
+rf_model, val_fe_dt_acc, best_params = evaluate_val_rf(
+    X_fe_dt_train, y_fe_dt_train, X_fe_dt_val, y_fe_dt_val
 )
-test_fe_dt_acc = evaluate_test_xgb(xgb_model, X_fe_dt_test, y_fe_dt_test)
+test_fe_dt_acc = evaluate_test_rf(rf_model, X_fe_dt_test, y_fe_dt_test)
 
 # Plot a chart comparing the model’s performance across datasets.
 
@@ -170,7 +167,7 @@ rects2 = ax.bar(x+width/2, test_accs, width,
 
 ax.set_ylim(0.5, 1.05)
 ax.set_ylabel('Accuracy')
-ax.set_title('XGBoost', fontsize=16)
+ax.set_title('Random Forest', fontsize=16)
 ax.set_xticks(x)
 ax.set_xticklabels(labels)
 ax.legend(ncol=2, loc='upper center')
@@ -184,5 +181,5 @@ def autolabel(rects):
 autolabel(rects1)
 autolabel(rects2)
 fig.tight_layout()
-plt.savefig('xgb_performance_4datasets.png', bbox_inches='tight')
+plt.savefig('Plots/rf_performance_4datasets.png', bbox_inches='tight')
 plt.show()

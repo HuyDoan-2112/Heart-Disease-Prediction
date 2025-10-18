@@ -227,8 +227,8 @@ Xt_te = fe_pre.transform(X_test)
 
 nz_cols = Xt_tr.columns[Xt_tr.nunique(dropna=False) > 1]
 Xt_tr = Xt_tr[nz_cols]
-Xt_va = Xt_va[nz_cols]
-Xt_te = Xt_te[nz_cols]
+Xt_va = Xt_va.reindex(columns=Xt_tr.columns, fill_value=0)
+Xt_te = Xt_te.reindex(columns=Xt_tr.columns, fill_value=0)
 
 # Apply mutual infor to evaluate and select the features that have the strongest relationship with the target variable
 
